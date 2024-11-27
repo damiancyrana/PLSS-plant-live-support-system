@@ -1,0 +1,130 @@
+from machine import Pin, ADC, I2C
+import ssd1306
+import time
+
+# Ustawienia pinów do komunikacji I2C
+I2C_SCL_PIN = 17  # Pin GP17 -> SCL wyświetlacza
+I2C_SDA_PIN = 16  # Pin GP16 -> SDA wyświetlacza
+
+# Inicjalizacja interfejsu I2C
+i2c = I2C(0, scl=Pin(I2C_SCL_PIN), sda=Pin(I2C_SDA_PIN), freq=400000)
+
+# Inicjalizacja wyświetlacza OLED
+WIDTH = 128
+HEIGHT = 32
+display = ssd1306.SSD1306_I2C(WIDTH, HEIGHT, i2c)
+
+# Definicje pinów
+MOISTURE_SENSOR_PIN = 26  # GP26 - wejście ADC czujnika
+SENSOR_POWER_PIN = 14     # GP14 - sterowanie zasilaniem czujnika
+RELAY_PIN = 15            # GP15 - sterowanie przekaźnikiem
+
+# Wartości ADC dla gleby suchej i mokrej
+ADC_DRY = 20250
+ADC_WET = 18440
+
+# Stałe czasowe
+HOURS_BETWEEN_MEASUREMENTS = 12     # Pomiar co 1 godzinę
+MEASUREMENT_INTERVAL = 3600 * HOURS_BETWEEN_MEASUREMENTS  # Przeliczenie na sekundy
+WATERING_DURATION = 3             # Czas podlewania w sekundach
+NUMBER_OF_READINGS = 10           # Liczba pomiarów w jednym cyklu
+READING_INTERVAL = 1              # Sekunda między pomiarami
+
+class Plant:
+    def __init__(self, name, ideal_moisture):
+        self.name = name
+        self.ideal_moisture = ideal_moisture
+
+class MoistureSensor:
+    def __init__(self, adc_pin, power_pin):
+        self.adc = ADC(Pin(adc_pin))
+        self.power = Pin(power_pin, Pin.OUT)
+        self.power.value(0)
+
+    def measure_cycle(self):
+        # Włączenie zasilania czujnika
+        self.power.value(1)
+        time.sleep(1)  # Stabilizacja czujnika
+        
+        # Seria 10 pomiarów
+        readings = []
+        for _ in range(NUMBER_OF_READINGS):
+            readings.append(self.adc.read_u16())
+            time.sleep(READING_INTERVAL)
+        
+        # Wyłączenie zasilania czujnika
+        self.power.value(0)
+        
+        # Obliczenie średniej
+        return int(sum(readings) / len(readings))
+
+class Relay:
+    def __init__(self, pin):
+        self.relay = Pin(pin, Pin.OUT)
+        self.relay.value(0)
+
+    def water_for_duration(self, duration, display, moisture):
+        # Włącz pompę i pokaż status podlewania
+        self.relay.value(1)
+        display.fill(0)
+        display.text(f"Rosl.: {basil.name}", 0, 0)
+        display.text(f"Wilg.: {moisture:.1f}%", 0, 10)
+        display.text("Podlewanie...", 0, 20)
+        display.show()
+        
+        # Czekaj określony czas
+        time.sleep(duration)
+        
+        # Wyłącz pompę
+        self.relay.value(0)
+
+def normalize_moisture(adc_value):
+    moisture_percent = ((adc_value - ADC_WET) / (ADC_DRY - ADC_WET)) * 100
+    moisture_percent = max(0, min(100, moisture_percent))
+    return 100 - moisture_percent
+
+def get_next_measurement_time():
+    current = time.localtime()
+    next_hour = (current[3] + HOURS_BETWEEN_MEASUREMENTS) % 24
+    return f"{next_hour:02d}:{current[4]:02d}"
+
+# Inicjalizacja obiektów
+sensor = MoistureSensor(MOISTURE_SENSOR_PIN, SENSOR_POWER_PIN)
+relay = Relay(RELAY_PIN)
+basil = Plant("Bazylia", ideal_moisture=60)
+
+while True:
+    current_time = time.localtime()
+    
+    # Wyświetl informację o rozpoczęciu pomiarów
+    display.fill(0)
+    display.text("Pomiar...", 0, 0)
+    display.text(f"Godz: {current_time[3]:02d}:{current_time[4]:02d}", 0, 10)
+    display.show()
+    
+    # Wykonaj cykl pomiarowy
+    adc_value = sensor.measure_cycle()
+    moisture = normalize_moisture(adc_value)
+    
+    # Wyświetl wyniki pomiarów
+    display.fill(0)
+    display.text(f"Rosl.: {basil.name}", 0, 0)
+    display.text(f"Wilg.: {moisture:.1f}%", 0, 10)
+    
+    # Sprawdź czy potrzebne podlewanie
+    if moisture < basil.ideal_moisture:
+        # Podlewaj przez 2 sekundy
+        relay.water_for_duration(WATERING_DURATION, display, moisture)
+    
+    # Po podlewaniu lub jeśli nie było potrzeby podlewania
+    # wyświetl informację o następnym pomiarze
+    next_measurement = get_next_measurement_time()
+    display.fill(0)
+    display.text(f"Rosl.: {basil.name}", 0, 0)
+    display.text(f"Wilg.: {moisture:.1f}%", 0, 10)
+    display.text(f"Nast.pom: {next_measurement}", 0, 20)
+    display.show()
+    
+    # Czekaj godzinę do następnego cyklu
+    time.sleep(MEASUREMENT_INTERVAL)
+
